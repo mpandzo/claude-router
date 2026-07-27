@@ -15,7 +15,7 @@ line="$(jq -r '.prompt // ""' | "$here/classify.sh")" || true
 [ -n "$line" ] || exit 0
 IFS=$'\t' read -r model tier reason <<<"$line"
 
-short="🎯 model-router: ${tier} (${model}) — ${reason}"
+short="🎯 model-router — based on the prompt, this looks like ${tier}-tier work; suggested model: ${model} (${reason})."
 full="model-router suggestion → ${tier} (${model}, ${reason}). Advisory only: this does NOT change the current session's model. To act on it, delegate the task to a subagent spawned with that model (the /model-router skill does this) or tell the user to /model. Ignore mid-multi-turn or when the user already named a model."
 
 jq -n --arg s "$short" --arg f "$full" \

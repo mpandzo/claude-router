@@ -34,5 +34,5 @@ updated_input="$(printf '%s' "$payload" | jq --arg m "$picked" '.tool_input + {m
 
 jq -n \
   --argjson ui "$updated_input" \
-  --arg msg "🎯 model-router: routing this agent → ${picked} (${tier} — ${reason})" \
+  --arg msg "🎯 model-router — set this agent's model to ${picked} (${tier}; ${reason})." \
   '{systemMessage:$msg, hookSpecificOutput:{hookEventName:"PreToolUse", updatedInput:$ui}}'
