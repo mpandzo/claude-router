@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/suggest-tier.sh",
+            "timeout": 10,
+            "statusMessage": "Classifying task complexity..."
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/route-agent.sh",
+            "timeout": 10,
+            "statusMessage": "Routing agent model..."
+          }
+        ]
+      }
+    ]
+  }
+}

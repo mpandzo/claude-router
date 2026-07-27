@@ -1,0 +1,13 @@
+{
+  "name": "claude-router",
+  "owner": {
+    "name": "Mirza Pandzo"
+  },
+  "plugins": [
+    {
+      "name": "claude-router",
+      "source": "./",
+      "description": "Model-tier router: classifies task complexity and delegates work to the most cost-effective Claude model (Haiku/Sonnet/Opus), plus an advisory UserPromptSubmit hook."
+    }
+  ]
+}
