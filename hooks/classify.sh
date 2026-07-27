@@ -62,9 +62,9 @@ consider "$ca" architectural
 
 reason=""
 case "$tier" in
-  trivial)       reason="mechanical edit" ;;
-  standard)      reason="standard code change" ;;
-  complex)       reason="multi-file / feature work" ;;
+  trivial)       reason="low-complexity task" ;;
+  standard)      reason="routine task" ;;
+  complex)       reason="broad / multi-part task" ;;
   architectural) reason="design / risk / security" ;;
 esac
 
