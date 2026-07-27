@@ -52,6 +52,8 @@ The CLI fallback uses a portable timeout: `timeout`/`gtimeout` if present (stock
 
 Every classification appends a tab-separated line to the log — `<UTC timestamp>\t<verdict>\t<brief snippet>` — where `verdict` is the injected model, `keep`, or `none`. Use it to see whether routing is actually helping (distribution of models, how often it abstains) before trusting it. Delete or `/dev/null` the log to opt out.
 
+The path is anchored to `$HOME`, so it's `~/.claude/claude-router.log` regardless of install method (`--plugin-dir`, marketplace, etc.); override with `CLAUDE_ROUTER_LOG`.
+
 ## Components
 
 ```
