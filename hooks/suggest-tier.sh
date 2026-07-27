@@ -11,7 +11,7 @@
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-line="$(jq -r '.prompt // ""' | "$here/classify.sh")" || true
+line="$(jq -r '.prompt // ""' | "$here/classify.sh" --with-overrides)" || true
 [ -n "$line" ] || exit 0
 IFS=$'\t' read -r model tier reason <<<"$line"
 
