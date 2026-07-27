@@ -99,10 +99,14 @@ api_call() {   # prints raw model text; instruction is a system prompt, brief is
 }
 
 cli_call() {   # prints raw model text
-  # --system-prompt replaces the default agentic prompt so it classifies, not
-  # acts; --allowed-tools "" is fail-safe hardening so no tools are ever available.
+  # --system-prompt replaces the default agentic prompt so it classifies, not acts;
+  # --allowed-tools "" is fail-safe hardening (no tools available);
+  # --strict-mcp-config skips project MCP-server startup, the main cold-start cost,
+  # while keeping OAuth. (--bare would be lighter but disables OAuth and demands an
+  # API key — which this fallback exists precisely to avoid.)
   run_with_timeout "$TIMEOUT" env CLAUDE_ROUTER_CLASSIFYING=1 \
-    claude -p "AGENT BRIEF:\n$brief" --system-prompt "$INSTR" --model haiku --allowed-tools "" 2>/dev/null || true
+    claude -p "AGENT BRIEF:\n$brief" --system-prompt "$INSTR" --model haiku \
+      --allowed-tools "" --strict-mcp-config 2>/dev/null || true
 }
 
 classify() {   # prints haiku|sonnet|opus|keep, or nothing

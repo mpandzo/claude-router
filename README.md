@@ -16,7 +16,7 @@ The classifier is instructed via a **system prompt** (not the user turn), which 
 The classifier LLM runs on **every** modelless spawn, via one of two backends:
 
 1. **Anthropic API** (`curl`) when `ANTHROPIC_API_KEY` is set — fast and isolated. The first-party API needs only the key (sent as `x-api-key`); there is no separate "secret".
-2. **`claude -p --model haiku`** otherwise — reuses your existing Claude Code auth, no key needed, but heavier (spawns a nested CLI). If the API path errors, it also falls back here when `claude` is available.
+2. **`claude -p --model haiku`** otherwise — reuses your existing Claude Code auth (OAuth), no key needed. It runs stripped down (`--strict-mcp-config`, no tools, replaced system prompt) to cut cold-start cost, but it still boots a nested CLI, so it's slower than the API and **can time out under a parallel fan-out** (several concurrent cold starts). The API backend avoids this entirely — prefer setting a key. If the API path errors, it also falls back here when `claude` is available.
 
 Note: when `ANTHROPIC_API_KEY` is set, the `claude -p` fallback inherits it too, so an invalid key fails both backends (routing then no-ops).
 
