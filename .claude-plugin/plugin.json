@@ -1,6 +1,6 @@
 {
   "name": "claude-router",
-  "description": "Model-tier router: classifies task complexity and routes real work to the most cost-effective Claude model (Haiku/Sonnet/Opus) by delegating to a subagent. Includes an advisory UserPromptSubmit hook.",
+  "description": "Model-tier router: on agent spawns, an LLM classifies the brief and injects a cost-appropriate Claude model (Haiku/Sonnet/Opus) via a PreToolUse hook (Anthropic API, or claude -p fallback). Also ships a model-router skill.",
   "version": "1.0.0",
   "author": {
     "name": "Mirza Pandzo"
