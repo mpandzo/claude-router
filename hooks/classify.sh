@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
 # Shared keyword classifier for claude-router.
 #
-# Usage: classify.sh [--with-overrides] < text
+# Usage: classify.sh [--with-overrides | --agent] < text
 #   Reads raw text on stdin. Prints "<model>\t<tier>\t<reason>" when it can
 #   classify, or nothing (exit 0) when inconclusive.
 #
-#   --with-overrides enables user-intent overrides ("use opus", "cheap",
-#   "thorough"). These express what the USER wants and are meaningful only for
-#   the user's own prompt — never for a generated agent brief, where words like
-#   "carefully" appear incidentally. route-agent therefore omits the flag.
+#   --with-overrides  (suggest-tier) enables user-intent overrides ("use opus",
+#       "cheap", "thorough"). These express what the USER wants and are meaningful
+#       only for the user's own prompt — never for a generated agent brief, where
+#       words like "carefully" appear incidentally.
+#   --agent  (route-agent) applies the conservative-downgrade policy: it will
+#       RAISE a spawn to Opus on a genuine architectural/high-stakes signal, but
+#       only downgrades to a cheaper model when the brief shows NO complexity
+#       signals at all. If any complex/architectural signal is present but didn't
+#       win, it stays silent so the spawn keeps the session default rather than
+#       being risked onto a weaker model on brittle keyword evidence.
 #
 # Design notes (learned the hard way):
 #   - Path/filename tokens are stripped first, so a filename like
@@ -22,8 +28,11 @@
 
 set -euo pipefail
 
-overrides=0
-if [ "${1:-}" = "--with-overrides" ]; then overrides=1; fi
+mode="base"
+case "${1:-}" in
+  --with-overrides) mode="overrides" ;;
+  --agent)          mode="agent" ;;
+esac
 
 raw="$(tr '[:upper:]' '[:lower:]')"
 
@@ -36,7 +45,11 @@ text="$(printf '%s' "$raw" \
 
 # Signal sets. Single words are \b-bounded; multi-word phrases are specific
 # enough to match as-is.
-P_TRIVIAL='\b(typo|typos|rename|reformat|lint|indent|whitespace|spelling)\b|\bformat\b'
+# NOTE: "format" and "typo" are deliberately excluded. They are meta-language —
+# "## Output format" headings and "check for typos" instructions are boilerplate
+# in structured agent briefs, and matching them classifies the brief's wrapper
+# rather than the work itself (which silently downgraded real research agents).
+P_TRIVIAL='\b(rename|reformat|lint|indent|whitespace|spelling)\b'
 P_STANDARD='\b(bug|bugs|validation)\b|\badd(ing)? (a |an )?tests?\b|\bunit tests?\b|refactor (this )?function|small (feature|change|refactor)'
 P_COMPLEX='\b(migration|integration|endpoint)\b|\bapi\b|multi-file|multiple files|new feature'
 P_ARCH='system design|\barchitecture\b|\barchitect\b|major refactor|large refactor|breaking change|security (audit|review|issue|fix|hardening)|\bvulnerabilit|threat model|\bperformance\b'
@@ -69,7 +82,7 @@ case "$tier" in
 esac
 
 # User-intent overrides win outright — only when reading the user's own prompt.
-if [ "$overrides" -eq 1 ]; then
+if [ "$mode" = "overrides" ]; then
   om() { printf '%s' "$text" | grep -Eq "$1"; }
   if om '\buse opus\b|\bthorough(ly)?\b|\bcarefully\b|\bbe careful\b'; then
     tier=architectural; reason="explicit: thorough/opus"
@@ -78,6 +91,13 @@ if [ "$overrides" -eq 1 ]; then
   elif om '\buse sonnet\b'; then
     tier=standard; reason="explicit: sonnet"
   fi
+fi
+
+# Conservative-downgrade policy for agent spawns: allow raising to Opus, but only
+# downgrade when there is NO complexity signal at all. If a complex/architectural
+# signal is present but a cheaper tier won on count, stay silent (keep default).
+if [ "$mode" = "agent" ] && [ "$tier" != "architectural" ]; then
+  if [ "$cc" -gt 0 ] || [ "$ca" -gt 0 ]; then exit 0; fi
 fi
 
 [ -n "$tier" ] || exit 0

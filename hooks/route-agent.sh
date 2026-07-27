@@ -25,7 +25,7 @@ subtype="$(get '.tool_input.subagent_type // ""')"
 
 # Classify from the subagent's description + prompt.
 brief="$(get '[.tool_input.description, .tool_input.prompt] | map(select(. != null)) | join(" ")')"
-line="$(printf '%s' "$brief" | "$here/classify.sh")" || true
+line="$(printf '%s' "$brief" | "$here/classify.sh" --agent)" || true
 [ -n "$line" ] || exit 0
 IFS=$'\t' read -r picked tier reason <<<"$line"
 

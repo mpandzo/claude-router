@@ -6,7 +6,7 @@ A Claude Code plugin that classifies task complexity and facilitates running sub
 
 - **`model-router` skill** — at the start of a self-contained task, or when a prompt fans out into multiple agents, classifies complexity and delegates the work to a subagent spawned on the matching model (Haiku / Sonnet / Opus). A subagent's `model` is set per spawn, which is where the cost is actually moved.
 - **`UserPromptSubmit` hook** — surfaces an advisory suggested tier on each prompt (e.g. `🎯 model-router: standard (sonnet) — ...`).
-- **`PreToolUse` hook (Agent/Task)** — fires when an agent is about to spawn. If the spawn names no model and isn't a fork, it classifies the subagent's own brief and injects a matching model. Explicit models and inconclusive briefs are left untouched.
+- **`PreToolUse` hook (Agent/Task)** — fires when an agent is about to spawn. If the spawn names no model and isn't a fork, it classifies the brief and may inject a model. It is conservative: it raises to Opus on genuine high-stakes signals, but only downgrades to a cheaper model when the brief shows no complexity signals at all — otherwise it leaves the session default untouched. Explicit models and forks are never changed.
 
 Model selection happens through the subagent `model` override (the skill and the PreToolUse hook) or `/model` (manual). The current session's own model is not changed.
 
