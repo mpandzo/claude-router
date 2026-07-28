@@ -3,8 +3,15 @@
 #
 # Every modelless, non-fork spawn is classified by an LLM which reads the brief
 # (the full task the subagent will act on) and replies haiku|sonnet|opus|keep.
-# "keep" (and any unparseable/failed reply) means: change nothing, keep the
-# session default. Two backends, in order:
+#
+# A modelless subagent INHERITS the main conversation's model (per Claude Code
+# docs), captured at SessionStart by capture-model.sh. A verdict is applied only
+# when it is CHEAPER than that inherited model — a real downgrade, never an
+# upgrade (an equal verdict is a no-op). 'opus' as an upgrade is applied only when
+# CLAUDE_ROUTER_ALLOW_OPUS is set. When the inherited model is unknown (no capture),
+# only Haiku is applied, since it's the one model that can't cost more than
+# anything. 'keep'/unparseable/failure change nothing. All verdicts are logged
+# regardless, so telemetry shows what the classifier judged. Two backends, in order:
 #   1. Anthropic API (curl) when ANTHROPIC_API_KEY is available — fast, tool-less.
 #   2. `claude -p` otherwise — reuses existing Claude Code auth, no key needed.
 # If the API path yields nothing (error/timeout) it falls back to the CLI path
@@ -20,6 +27,9 @@
 # Env:
 #   ANTHROPIC_API_KEY           enables the API backend (x-api-key only; no secret).
 #   CLAUDE_ROUTER_API_MODEL     model id for the API call (default claude-haiku-4-5-20251001).
+#   CLAUDE_ROUTER_ALLOW_OPUS    set to also apply an 'opus' verdict. Off by default:
+#                               subagents inherit the main model, so applying Opus may
+#                               cost more. Only Haiku (the cost floor) is applied by default.
 #   CLAUDE_ROUTER_LLM_TIMEOUT   seconds to wait on either backend (default 30).
 #   CLAUDE_ROUTER_LOG           telemetry log path (default ~/.claude/claude-router.log;
 #                               set to /dev/null to disable).
@@ -60,11 +70,20 @@ subtype="$(get '.tool_input.subagent_type // ""')"
 brief="$(get '[.tool_input.description, .tool_input.prompt] | map(select(. != null)) | join(" ")')"
 [ -n "${brief//[[:space:]]/}" ] || exit 0
 
+# The model the subagent would inherit (main conversation's model), captured by
+# capture-model.sh at SessionStart and keyed by session_id. Empty if unknown.
+inherited=""
+__sid="$(get '.session_id // ""')"
+if [ -n "$__sid" ]; then
+  __dir="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/claude-router}"
+  [ -f "$__dir/model-$__sid" ] && inherited="$(cat "$__dir/model-$__sid" 2>/dev/null || true)"
+fi
+
 TIMEOUT="${CLAUDE_ROUTER_LLM_TIMEOUT:-30}"
 LOG="${CLAUDE_ROUTER_LOG:-$HOME/.claude/claude-router.log}"
-INSTR="You are a model-complexity router for an AI coding assistant. You are given the BRIEF that will be handed to a subagent. Reply with EXACTLY ONE lowercase word: haiku, sonnet, opus, or keep. Judge only the difficulty of the underlying work; IGNORE any output-format instructions, headings, or boilerplate in the brief. haiku = trivial or mechanical; sonnet = standard implementation, refactoring, or research; opus = deep reasoning, system/architecture design, security-critical, or high-risk verification; keep = the task is ordinary enough that the session default is fine, OR you are unsure — prefer 'keep' over guessing. Output the single word and nothing else."
+INSTR="You are a model-complexity router for an AI coding assistant. You are given the BRIEF that will be handed to a subagent. Reply with EXACTLY ONE lowercase word: haiku, sonnet, opus, or keep. Judge only the difficulty of the underlying work; IGNORE any output-format instructions, headings, or boilerplate in the brief. haiku = trivial or mechanical; sonnet = standard implementation, refactoring, or research; opus = deep reasoning, system/architecture design, security-critical, or high-risk verification; keep = an ordinary task where the default model is fine, OR you are unsure — prefer 'keep' over guessing. Output the single word and nothing else."
 
-log() { printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$1" "$(printf '%s' "$brief" | tr '\n\t' '  ' | cut -c1-120)" >> "$LOG" 2>/dev/null || true; }
+log() { printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$1" "$(printf '%s' "$brief" | tr '\n\t' '  ' | cut -c1-300)" >> "$LOG" 2>/dev/null || true; }
 
 parse_word() { printf '%s' "$1" | { grep -oiE 'haiku|sonnet|opus|keep' || true; } | head -n1 | tr '[:upper:]' '[:lower:]'; }
 
@@ -127,10 +146,24 @@ classify() {   # prints haiku|sonnet|opus|keep, or nothing
 verdict="$(classify)"
 log "${verdict:-none}"
 
-case "$verdict" in
-  haiku|sonnet|opus) ;;   # inject below
-  *) exit 0 ;;            # keep / unsure / failure -> leave the session default
-esac
+# Apply a verdict only when it's cheaper than what the subagent would inherit —
+# never an upgrade. rank: haiku<sonnet<opus; 0 = not a model / unknown.
+rank() { case "$1" in *opus*) echo 3 ;; *sonnet*) echo 2 ;; *haiku*) echo 1 ;; *) echo 0 ;; esac; }
+vr="$(rank "$verdict")"
+[ "$vr" -gt 0 ] || exit 0            # keep / unsure / failure -> leave inherited model
+ir="$(rank "$inherited")"            # 0 when the inherited model is unknown
+
+apply=""
+if [ "$ir" -eq 0 ]; then
+  # Inherited model unknown: only Haiku is guaranteed not to increase cost.
+  [ "$vr" -eq 1 ] && apply=1
+elif [ "$vr" -lt "$ir" ]; then
+  apply=1                            # strictly cheaper -> a real downgrade
+elif [ "$vr" -gt "$ir" ] && [ "$verdict" = "opus" ] && [ -n "${CLAUDE_ROUTER_ALLOW_OPUS:-}" ]; then
+  apply=1                            # opt-in upgrade to Opus
+fi
+# vr == ir -> no-op (already on that model); anything else -> leave as-is.
+[ -n "$apply" ] || exit 0
 
 updated_input="$(printf '%s' "$payload" | jq --arg m "$verdict" '.tool_input + {model:$m}')"
 

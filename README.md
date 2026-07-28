@@ -5,7 +5,10 @@ A Claude Code plugin that classifies task complexity and facilitates running sub
 ## What it does
 
 - **`model-router` skill** — at the start of a self-contained task, or when a prompt fans out into multiple agents, classifies complexity and delegates the work to a subagent spawned on the matching model (Haiku / Sonnet / Opus). A subagent's `model` is set per spawn, which is where the cost is actually moved.
-- **`PreToolUse` hook (Agent)** — fires when an agent is about to spawn. If the spawn names no model, isn't a fork, and has a non-empty brief, an **LLM reads the brief** (the full task the subagent will act on) and replies `haiku` / `sonnet` / `opus` / `keep`. A named model is injected via `updatedInput`; **`keep` (or any unsure/failed reply) abstains** and leaves the session default. There's no keyword heuristic — the LLM judges the actual work. The decision is also surfaced back to the assistant via `additionalContext` (so it can re-spawn with an explicit model if the routing is wrong) and to you via `systemMessage`.
+- **`PreToolUse` hook (Agent)** — fires when an agent is about to spawn. If the spawn names no model, isn't a fork, and has a non-empty brief, an **LLM reads the brief** (the full task the subagent will act on) and replies `haiku` / `sonnet` / `opus` / `keep`. There's no keyword heuristic — the LLM judges the actual work. The decision is surfaced back to the assistant via `additionalContext` (so it can re-spawn with an explicit model if the routing is wrong) and to you via `systemMessage`.
+- **`SessionStart` hook** — records the main conversation's model so the router knows the baseline (see below).
+
+**Never an upgrade.** A modelless subagent inherits the *main conversation's* model, so injecting a pricier model would *raise* cost. The router applies a verdict only when it's **cheaper than the inherited model** — a real downgrade (e.g. on an Opus session it can drop trivial subtasks to Haiku and standard ones to Sonnet). An equal verdict is a no-op; `keep` / unsure / failure change nothing. Upgrading to Opus happens only with `CLAUDE_ROUTER_ALLOW_OPUS`. When the inherited model is unknown (SessionStart didn't capture it), only Haiku is applied, since it can't cost more than anything.
 
 Model selection happens through the subagent `model` override (the skill and the PreToolUse hook) or `/model` (manual). The current session's own model is not changed.
 
@@ -41,12 +44,17 @@ Only the `ANTHROPIC_API_KEY` line is read; the files are never executed.
 |-----|--------|
 | `ANTHROPIC_API_KEY` | Enables the API backend. Only the key is needed (no secret). |
 | `CLAUDE_ROUTER_API_MODEL` | Model id for the API call (default `claude-haiku-4-5-20251001`). |
+| `CLAUDE_ROUTER_ALLOW_OPUS` | Set to also apply an `opus` verdict even when it's an upgrade. Off by default (upgrades cost more). |
 | `CLAUDE_ROUTER_LLM_TIMEOUT` | Seconds to wait on either backend (default 30). On timeout, the spawn keeps the session default. |
 | `CLAUDE_ROUTER_LOG` | Telemetry log path (default `~/.claude/claude-router.log`; set to `/dev/null` to disable). |
 | `CLAUDE_ROUTER_LLM_CMD` | Override the classifier command (reads the brief on stdin, prints a word); mainly for testing. |
 | `CLAUDE_ROUTER_CLASSIFYING` | Set internally around the CLI call so the nested `claude` doesn't re-trigger this hook; not for manual use. |
 
 The CLI fallback uses a portable timeout: `timeout`/`gtimeout` if present (stock macOS has neither), otherwise a built-in fallback — no dependency required.
+
+### Inherited model (the baseline)
+
+PreToolUse hooks don't receive the session model, so the `SessionStart` hook records it to `$CLAUDE_PLUGIN_DATA/model-<session_id>` (falling back to `~/.claude/claude-router/`), and the router reads it back by `session_id`. This is what lets it tell a downgrade from an upgrade. Two caveats: the model field isn't guaranteed at SessionStart (then the baseline is unknown → Haiku-only), and it isn't refreshed if you change models mid-session with `/model` (no hook fires for that), so the baseline can go stale until the next session start.
 
 ### Telemetry
 
@@ -63,8 +71,9 @@ claude-router/
 │   └── marketplace.json         # marketplace manifest
 ├── skills/model-router/SKILL.md # the router skill
 ├── hooks/
-│   ├── hooks.json      # registers the PreToolUse hook
-│   └── route-agent.sh  # PreToolUse: LLM-classifies the brief, injects a model
+│   ├── hooks.json        # registers the SessionStart + PreToolUse hooks
+│   ├── capture-model.sh  # SessionStart: records the session model as the baseline
+│   └── route-agent.sh    # PreToolUse: LLM-classifies the brief, injects a cheaper model
 └── tests/
     └── route-agent.test.sh  # hermetic tests (mocked classifier, no network)
 ```
