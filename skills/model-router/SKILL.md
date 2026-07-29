@@ -1,82 +1,41 @@
 ---
 name: model-router
-description: Use at the START of a self-contained coding/analysis task to route the actual work to the most cost-effective model. Classifies task complexity, then DELEGATES the work to a subagent spawned on Haiku (trivial), Sonnet (standard), or Opus (architectural/security). ALSO use when a prompt fans out into multiple agents — classify and route each spawned agent's model independently. Skip when the user named a model, mid-multi-turn task, or when the task is a tiny one-liner not worth a subagent hop.
+description: How to choose a subagent's model and subagent_type when spawning agents. A modelless subagent inherits the session's model, and a PreToolUse hook auto-routes trivial spawns to a cheaper model — never a pricier one. The rule when you set a model yourself is the same: only ever DOWNGRADE (never cost more than the session is on). Consult when spawning an agent, picking a subagent_type, or fanning out into multiple agents.
 ---
 
 # Model Router
 
-Route a task's real work onto the cheapest model that will do it well. This works because the `Agent` tool honors a per-spawn `model` override — the subagent does the bulk token work (reading, editing, testing) on the chosen model, and this session only classifies and relays the result.
+A subagent spawned without a `model` **inherits the main conversation's model**. So the only cost-relevant lever is passing a *cheaper* model than the session is on — and passing a *pricier* one is a cost increase that this plugin deliberately avoids.
 
-This does NOT change the model of the current session. It cannot. The only real lever is delegating work to a subagent with an explicit `model`.
+This plugin's `PreToolUse` hook already routes automatically: for any spawn you make without a `model`, it reads the brief, and if the task is clearly simpler than the session's model warrants, it injects a cheaper model — never an upgrade. So the default, correct behaviour is usually to **leave `model` unset and let the hook decide.**
 
-## When to route (and when not to)
+## The one rule
 
-Route only when ALL of these hold:
-- The task is **self-contained** and can be handed off in one prompt (a subagent starts cold — no shared context).
-- The work is **substantial enough** that offloading beats the spawn overhead. A literal one-line edit you already understand: just do it inline, don't route.
-- The user did **not** name a model.
+**Never pass a `model` more expensive than the current session's model.** Ranking: `haiku` < `sonnet` < `opus`. Set a model explicitly only to force a *downgrade*; otherwise leave it unset.
 
-Skip routing entirely when:
-- The user specified a model ("use opus", "cheap model") → honor that instead (see Overrides).
-- You are mid multi-turn task → keep whatever you're already on for consistency.
-- The task is genuinely ambiguous → clarify first, then route.
+- Session on **Opus**: a trivial subtask → `haiku`; a routine/standard subtask → `sonnet`; a genuinely hard subtask → leave unset (stays Opus).
+- Session on **Sonnet**: a trivial subtask → `haiku`; anything else → leave unset (stays Sonnet). Do **not** pass `opus`.
+- Session on **Haiku**: leave unset (already the cheapest).
 
-## Step 1 — Classify complexity
+When in doubt, leave `model` unset — the hook is conservative and abstains rather than guess, and it can't upgrade.
 
-Judge the task holistically (this is a heuristic, not arithmetic). Match to the highest tier whose description fits:
+There are no "escalate to Opus for audits/security" overrides: raising the model above the session's is exactly the cost increase we're avoiding. If a task genuinely needs a stronger model than the session is on, that's a decision for the *session* model (`/model`), not a per-spawn upgrade.
 
-| Tier | Model | Fits |
-|------|-------|------|
-| trivial | `haiku` | typo, rename, format, lint fix, comment/copy edit, single obvious line |
-| standard | `sonnet` | bug fix, add a test, small-to-medium feature, single-file refactor, add validation, wire an endpoint |
-| complex | `sonnet` | multi-file feature, migration, non-trivial integration — Sonnet handles these well; reserve Opus for genuine design/risk |
-| architectural | `opus` | system/API design, major cross-cutting refactor, security audit, anything where a wrong call is expensive to unwind |
+## Choosing `subagent_type`
 
-## Step 2 — Overrides (win over classification)
+Independent of the model, match the type to the kind of work:
 
-- User says "use opus" / "use sonnet" / "use haiku" → that model.
-- User says "cheap" / "fast" / "quick" → `haiku`.
-- User says "thorough" / "careful" / "audit" → `opus`.
-- Security / vulnerability / auth-critical work → `opus`.
-- Production deployment / breaking change → `opus`.
+- **Read-only investigation / search / codebase questions** → `Explore` (no write tools, so it can't misfire on files).
+- **Design / architecture / planning, no edits** → `Plan`.
+- **Implementation, edits, multi-step execution** → `general-purpose` (full tools). `claude` is an equivalent all-tools catch-all.
+- Prefer a specialized project/plugin agent when one clearly matches.
 
-## Step 3 — Context nudges (shift one tier)
-
-- Unfamiliar or poorly-documented codebase → bump up one tier (more exploration headroom).
-- Critical-path / hard-to-reverse code → bump up one tier.
-- Isolated test/mock/fixture code → drop one tier.
-
-## Step 4 — Delegate
-
-Spawn the work with the `Agent` tool, passing the chosen model:
-
-- `model`: the family alias for the tier you picked in Step 1 — `haiku`, `sonnet`, or `opus`. These are exactly the values the `Agent` tool's `model` field accepts, and each resolves to the current version of that family.
-- `subagent_type`: pick by the *kind* of work — there is no single "best" type, match it to the task:
-  - **Read-only investigation / search / codebase questions** → `Explore` (no write tools, so it can't misfire on files).
-  - **Design / architecture / planning, no edits** → `Plan`.
-  - **Implementation, edits, multi-step execution** → `general-purpose` (full tools). `claude` is an equivalent all-tools catch-all if `general-purpose` doesn't fit.
-  - Prefer a more specialized project/plugin agent when one clearly matches — a named agent's own `model:` frontmatter is overridden by the `model` you pass here.
-- `prompt`: a complete, self-contained brief — the subagent has none of this conversation's context.
-- Do NOT use `subagent_type: "fork"` for routing — forks always inherit THIS session's model and ignore the override.
-
-## Step 5 — Report
-
-Before spawning, tell the user the routing decision in one line, so it's auditable and honest (the subagent, not this session, runs on that model):
-
-`Routing → <model> (<tier>): <one-clause reason>`
-
-Then relay what the subagent returns (its report is not shown to the user directly).
+**Never use `subagent_type: "fork"` for routing** — forks always inherit the session's model and ignore any `model` override, so a fork can't be downgraded.
 
 ## Fan-out: multiple agents in one prompt
 
-When a prompt requires launching several agents, there is NO automatic per-agent routing — nothing tags each spawn with a model for you. You must route each one deliberately:
+Each spawn is handled independently by the hook. If you set models yourself, apply the one rule to *each* spawn against the session model — a "build the feature and review it" split might send a trivial sub-check to `haiku` while the rest stays at the session default. Never pass a pricier model to any of them.
 
-- **Classify each subtask on its own** (Steps 1–3), against what *that* agent will actually do — not against the overall prompt. A "build the feature and audit its security" prompt splits into a `sonnet` implementation agent and an `opus` audit agent; don't pick one tier for the whole thing.
-- **Pass the matching `model` on every `Agent` call.** A model omitted on any spawn means that agent inherits THIS session's model — usually the expensive default — silently defeating the routing.
-- **Match `subagent_type` per agent too** (Step 4's mapping): the explorer that gathers context → `Explore`, the implementer → `general-purpose`, the planner → `Plan`.
-- **Never route a `fork`.** Forks always inherit this session's model regardless of the `model` you pass, so a fan-out built on forks is entirely unrouted. Use real subagent types when you want per-agent models.
-- **Report one line per agent** before spawning, e.g.:
-  - `Routing → sonnet (standard, general-purpose): implement the endpoint`
-  - `Routing → opus (architectural, general-purpose): security-audit the endpoint`
+## Report
 
-If the agents run in parallel, spawn them in a single batch with each carrying its own `model` — the override is per-call, so parallel spawns are routed independently.
+If you set a model explicitly, say so in one line so it's auditable — e.g. `Routing → haiku (trivial sub-check)`. If you leave it to the hook, it announces its own pick.

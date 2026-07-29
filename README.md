@@ -108,6 +108,6 @@ Or load the checkout directly at launch, without registering a marketplace:
 claude --plugin-dir <path-to-this-repo>
 ```
 
-## Classification tiers
+## The skill
 
-See `skills/model-router/SKILL.md` for the full tiers, overrides, context nudges, and the delegation and fan-out steps.
+`skills/model-router/SKILL.md` is guidance for the assistant when it spawns agents itself: leave `model` unset and let the hook route, and if you do set one, only ever pass a model **cheaper** than the session's (never an upgrade). It also covers `subagent_type` selection and fan-out. It mirrors the hook's downgrade-only rule so the two can't disagree.
