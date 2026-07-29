@@ -1,7 +1,7 @@
 {
   "name": "claude-router",
   "description": "Model-tier router: on agent spawns, an LLM classifies the brief and injects a cost-appropriate Claude model (Haiku/Sonnet/Opus) via a PreToolUse hook (Anthropic API, or claude -p fallback). Also ships a model-router skill.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": {
     "name": "Mirza Pandzo"
   }
