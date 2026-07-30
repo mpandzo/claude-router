@@ -1,113 +1,72 @@
 # claude-router
 
-A Claude Code plugin that classifies task complexity and facilitates running subagent work on a cost-appropriate Claude model (Haiku / Sonnet / Opus) rather than always the session default.
-
-## What it does
-
-- **`model-router` skill** — at the start of a self-contained task, or when a prompt fans out into multiple agents, classifies complexity and delegates the work to a subagent spawned on the matching model (Haiku / Sonnet / Opus). A subagent's `model` is set per spawn, which is where the cost is actually moved.
-- **`PreToolUse` hook (Agent)** — fires when an agent is about to spawn. If the spawn names no model, isn't a fork, and has a non-empty brief, an **LLM reads the brief** (the full task the subagent will act on) and replies `haiku` / `sonnet` / `opus` / `keep`. There's no keyword heuristic — the LLM judges the actual work. The decision is surfaced back to the assistant via `additionalContext` (so it can re-spawn with an explicit model if the routing is wrong) and to you via `systemMessage`.
-- **`SessionStart` hook** — records the main conversation's model so the router knows the baseline (see below).
-
-**Never an upgrade.** A modelless subagent inherits the *main conversation's* model, so injecting a pricier model would *raise* cost. The router applies a verdict only when it's **cheaper than the inherited model** — a real downgrade (e.g. on an Opus session it can drop trivial subtasks to Haiku and standard ones to Sonnet). An equal verdict is a no-op; `keep` / unsure / failure change nothing. Upgrading to Opus happens only with `CLAUDE_ROUTER_ALLOW_OPUS`. When the inherited model is unknown (SessionStart didn't capture it), only Haiku is applied, since it can't cost more than anything.
-
-Model selection happens through the subagent `model` override (the skill and the PreToolUse hook) or `/model` (manual). The current session's own model is not changed.
-
-The classifier is instructed via a **system prompt** (not the user turn), which both improves obedience and hardens against a brief trying to steer it. On the CLI backend the system prompt also replaces the default agentic prompt and tools are disabled, so it classifies rather than acts on the brief.
-
-## Configuration (env vars)
-
-The classifier LLM runs on **every** modelless spawn, via one of two backends:
-
-1. **Anthropic API** (`curl`) when `ANTHROPIC_API_KEY` is set — fast and isolated. The first-party API needs only the key (sent as `x-api-key`); there is no separate "secret".
-2. **`claude -p --model haiku`** otherwise — reuses your existing Claude Code auth (OAuth), no key needed. It runs stripped down (`--strict-mcp-config`, no tools, replaced system prompt) to cut cold-start cost, but it still boots a nested CLI, so it's slower than the API and **can time out under a parallel fan-out** (several concurrent cold starts). The API backend avoids this entirely — prefer setting a key. If the API path errors, it also falls back here when `claude` is available.
-
-Note: when `ANTHROPIC_API_KEY` is set, the `claude -p` fallback inherits it too, so an invalid key fails both backends (routing then no-ops).
-
-### Where the API key comes from
-
-The key is resolved in this order (first hit wins):
-
-1. The **environment** — `ANTHROPIC_API_KEY`.
-2. `<plugin>/.env` — convenient for local `--plugin-dir` development (git-ignored).
-3. `~/.claude/claude-router.env` — a stable user-level file.
-
-Only the `ANTHROPIC_API_KEY` line is read; the files are never executed.
-
-**From a marketplace install** the plugin lives in a cache dir, so `<plugin>/.env` isn't present. Supply the key via the environment or the user-level file instead:
-- `export ANTHROPIC_API_KEY=...` in `~/.zshrc`, or
-- `~/.claude/settings.json` → `{ "env": { "ANTHROPIC_API_KEY": "..." } }` (user-level, not committed), or
-- `~/.claude/claude-router.env` containing `ANTHROPIC_API_KEY=...`.
-
-### Variables
-
-| Var | Effect |
-|-----|--------|
-| `ANTHROPIC_API_KEY` | Enables the API backend. Only the key is needed (no secret). |
-| `CLAUDE_ROUTER_API_MODEL` | Model id for the API call (default `claude-haiku-4-5-20251001`). |
-| `CLAUDE_ROUTER_ALLOW_OPUS` | Set to also apply an `opus` verdict even when it's an upgrade. Off by default (upgrades cost more). |
-| `CLAUDE_ROUTER_LLM_TIMEOUT` | Seconds to wait on either backend (default 30). On timeout, the spawn keeps the session default. |
-| `CLAUDE_ROUTER_LOG` | Telemetry log path (default `~/.claude/claude-router.log`; set to `/dev/null` to disable). |
-| `CLAUDE_ROUTER_LLM_CMD` | Override the classifier command (reads the brief on stdin, prints a word); mainly for testing. |
-| `CLAUDE_ROUTER_CLASSIFYING` | Set internally around the CLI call so the nested `claude` doesn't re-trigger this hook; not for manual use. |
-
-The CLI fallback uses a portable timeout: `timeout`/`gtimeout` if present (stock macOS has neither), otherwise a built-in fallback — no dependency required.
-
-### Inherited model (the baseline)
-
-PreToolUse hooks don't receive the session model, so the `SessionStart` hook records it to `$CLAUDE_PLUGIN_DATA/model-<session_id>` (falling back to `~/.claude/claude-router/`), and the router reads it back by `session_id`. This is what lets it tell a downgrade from an upgrade. Two caveats: the model field isn't guaranteed at SessionStart (then the baseline is unknown → Haiku-only), and it isn't refreshed if you change models mid-session with `/model` (no hook fires for that), so the baseline can go stale until the next session start.
-
-### Telemetry
-
-Every classification appends a tab-separated line to the log — `<UTC timestamp>\t<verdict>\t<brief snippet>` — where `verdict` is the injected model, `keep`, or `none`. Use it to see whether routing is actually helping (distribution of models, how often it abstains) before trusting it. Delete or `/dev/null` the log to opt out.
-
-The path is anchored to `$HOME`, so it's `~/.claude/claude-router.log` regardless of install method (`--plugin-dir`, marketplace, etc.); override with `CLAUDE_ROUTER_LOG`.
-
-## Components
-
-```
-claude-router/
-├── .claude-plugin/
-│   ├── plugin.json              # plugin manifest
-│   └── marketplace.json         # marketplace manifest
-├── skills/model-router/SKILL.md # the router skill
-├── hooks/
-│   ├── hooks.json        # registers the SessionStart + PreToolUse hooks
-│   ├── capture-model.sh  # SessionStart: records the session model as the baseline
-│   └── route-agent.sh    # PreToolUse: LLM-classifies the brief, injects a cheaper model
-└── tests/
-    └── route-agent.test.sh  # hermetic tests (mocked classifier, no network)
-```
-
-## Testing
-
-```
-bash tests/route-agent.test.sh
-```
-
-Hermetic — the classifier is stubbed via `CLAUDE_ROUTER_LLM_CMD`, so no network or real `claude` is needed. It covers the skip conditions, injection, abstention, the reentrancy guard, transparency output, and telemetry. Backend behaviour (API, `claude -p`, timeouts) is validated manually.
+A Claude Code plugin that routes delegated agent work to a cost-appropriate model (Haiku / Sonnet / Opus) instead of always the session default. An LLM classifies each spawn's brief, and the verdict is applied only when it's **cheaper** than what the agent would otherwise inherit — never an upgrade.
 
 ## Install
-
-Add a marketplace pointing at this repo, then install the plugin:
 
 ```
 /plugin marketplace add <owner>/claude-router
 /plugin install claude-router@claude-router
 ```
 
-For local development, point the marketplace at the checkout directory instead:
+For local development, point the marketplace at the checkout (`/plugin marketplace add <path>`), or skip the marketplace entirely with `claude --plugin-dir <path>`.
+
+## How it works
+
+- **`SessionStart` hook** — records the main conversation's model: the baseline for "cheaper".
+- **`PreToolUse` hook (Agent)** — on a spawn with no `model`, no `fork`, and a non-empty brief, an LLM reads the brief and replies `haiku` / `sonnet` / `opus` / `keep`. No keyword heuristics — it judges the actual work. The pick is reported to you via `systemMessage` and back to the assistant via `additionalContext`, so it can re-spawn with an explicit model if the routing is wrong.
+- **`model-router` skill** — guidance for the assistant when it spawns agents itself: leave `model` unset and let the hook route; if you do set one, only ever pass something cheaper than the session's model. It mirrors the hook's rule so the two can't disagree.
+
+**Never an upgrade.** A modelless agent inherits the session's model, so injecting a pricier one would *raise* cost. Only a strictly cheaper verdict is applied (on an Opus session: trivial → Haiku, standard → Sonnet). An equal verdict, `keep`, unsure, and failure all change nothing; `opus` as an upgrade needs `CLAUDE_ROUTER_ALLOW_OPUS`; an unknown baseline means Haiku-only, the one model that can't cost more than anything. The session's own model is never touched — that's `/model`.
+
+The classifier is instructed via a **system prompt**, which improves obedience and hardens against a brief trying to steer it. On the CLI backend that prompt also replaces the default agentic one and tools are disabled, so it classifies rather than acts on the brief.
+
+## What gets routed
+
+The matcher is the `Agent` tool, so **every** agent spawned through it is covered: built-in types (`general-purpose`, `Explore`, `Plan`, …), custom `.claude/agents` or plugin agents, skill-launched spawns, background and worktree/remote-isolated agents, and nested fan-outs (where the baseline stays the *session* model, not the spawning agent's).
+
+Untouched: spawns that already name a `model` (an explicit choice wins), `subagent_type: "fork"` (forks ignore `model` overrides), the main session, and any environment where the plugin isn't loaded.
+
+For custom agents, note that a per-spawn `model` overrides an agent definition's `model:` frontmatter — and so can the hook's verdict, which is judged against the session model rather than the pin. Pass the model explicitly if the pin matters.
+
+## Configuration
+
+The classifier runs on every modelless spawn, via one of two backends:
+
+1. **Anthropic API** (`curl`) when `ANTHROPIC_API_KEY` is set — fast and isolated; only the key is needed (sent as `x-api-key`), there is no separate "secret".
+2. **`claude -p --model haiku`** otherwise — reuses your existing Claude Code OAuth, no key needed. It runs stripped down (`--strict-mcp-config`, no tools) but still boots a nested CLI, so it's slower and **can time out under a parallel fan-out**; prefer setting a key. It's also the fallback if the API path errors, which means an *invalid* key fails both backends (routing then no-ops).
+
+The key is resolved from the environment, then `<plugin>/.env` (git-ignored, for `--plugin-dir` dev), then `~/.claude/claude-router.env` — first hit wins. Only the `ANTHROPIC_API_KEY` line is read; the files are never executed. A marketplace install lives in a cache dir with no `.env`, so supply the key via the environment (`~/.zshrc`, or `~/.claude/settings.json` → `{ "env": { ... } }`) or the user-level file.
+
+| Var | Effect |
+|-----|--------|
+| `ANTHROPIC_API_KEY` | Enables the API backend. Only the key is needed (no secret). |
+| `CLAUDE_ROUTER_API_MODEL` | Model id for the API call (default `claude-haiku-4-5-20251001`). |
+| `CLAUDE_ROUTER_ALLOW_OPUS` | Set to also apply an `opus` verdict when it's an upgrade. Off by default. |
+| `CLAUDE_ROUTER_LLM_TIMEOUT` | Seconds to wait on either backend (default 30). On timeout the spawn keeps the session default. |
+| `CLAUDE_ROUTER_LOG` | Telemetry log path (default `~/.claude/claude-router.log`; `/dev/null` to disable). |
+| `CLAUDE_ROUTER_LLM_CMD` | Override the classifier command (brief on stdin, prints a word); mainly for testing. |
+| `CLAUDE_ROUTER_CLASSIFYING` | Set internally around the CLI call so the nested `claude` doesn't re-trigger the hook; not for manual use. |
+
+The CLI fallback's timeout is portable: `timeout`/`gtimeout` if present (stock macOS has neither), otherwise a built-in fallback — no dependency required.
+
+**The baseline.** PreToolUse hooks don't receive the session model, so `SessionStart` writes it to `$CLAUDE_PLUGIN_DATA/model-<session_id>` (falling back to `~/.claude/claude-router/`) and the router reads it back by `session_id`. Two caveats: the field isn't guaranteed at SessionStart (then the baseline is unknown → Haiku-only), and it isn't refreshed by a mid-session `/model`, so it can go stale until the next session start.
+
+**Telemetry.** Every classification appends a tab-separated `<UTC timestamp>\t<verdict>\t<brief snippet>` to the log, where `verdict` is the injected model, `keep`, or `none`. Check the distribution — which models, how often it abstains — before trusting the routing. The path is `$HOME`-anchored regardless of install method; delete it or point `CLAUDE_ROUTER_LOG` at `/dev/null` to opt out.
+
+## Layout and tests
 
 ```
-/plugin marketplace add <path-to-this-repo>
-/plugin install claude-router@claude-router
+.claude-plugin/{plugin,marketplace}.json   manifests
+skills/model-router/SKILL.md               the skill
+hooks/hooks.json                           registers both hooks
+hooks/capture-model.sh                     SessionStart: record the baseline
+hooks/route-agent.sh                       PreToolUse: classify, inject a cheaper model
+tests/route-agent.test.sh                  hermetic tests
 ```
 
-Or load the checkout directly at launch, without registering a marketplace:
-
 ```
-claude --plugin-dir <path-to-this-repo>
+bash tests/route-agent.test.sh
 ```
 
-## The skill
-
-`skills/model-router/SKILL.md` is guidance for the assistant when it spawns agents itself: leave `model` unset and let the hook route, and if you do set one, only ever pass a model **cheaper** than the session's (never an upgrade). It also covers `subagent_type` selection and fan-out. It mirrors the hook's downgrade-only rule so the two can't disagree.
+Hermetic — the classifier is stubbed via `CLAUDE_ROUTER_LLM_CMD`, so no network or real `claude` is needed. It covers the skip conditions, injection, abstention, the reentrancy guard, transparency output, and telemetry. Backend behaviour (API, `claude -p`, timeouts) is validated manually.

@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # PreToolUse (Agent): pick a model for agent spawns that don't set one.
 #
-# Every modelless, non-fork spawn is classified by an LLM which reads the brief
-# (the full task the subagent will act on) and replies haiku|sonnet|opus|keep.
+# Matches the Agent tool, so it covers EVERY agent spawned through it — built-in
+# types, custom .claude/agents and plugin agents, skill-launched spawns,
+# background and worktree/remote-isolated agents, and nested fan-outs.
 #
-# A modelless subagent INHERITS the main conversation's model (per Claude Code
+# Every modelless, non-fork spawn is classified by an LLM which reads the brief
+# (the full task the agent will act on) and replies haiku|sonnet|opus|keep.
+#
+# A modelless agent INHERITS the main conversation's model (per Claude Code
 # docs), captured at SessionStart by capture-model.sh. A verdict is applied only
 # when it is CHEAPER than that inherited model — a real downgrade, never an
 # upgrade (an equal verdict is a no-op). 'opus' as an upgrade is applied only when

@@ -1,11 +1,13 @@
 ---
 name: model-router
-description: How to choose a subagent's model and subagent_type when spawning agents. A modelless subagent inherits the session's model, and a PreToolUse hook auto-routes trivial spawns to a cheaper model — never a pricier one. The rule when you set a model yourself is the same: only ever DOWNGRADE (never cost more than the session is on). Consult when spawning an agent, picking a subagent_type, or fanning out into multiple agents.
+description: How to choose an agent's model and subagent_type when spawning any agent through the Agent tool. A modelless agent inherits the session's model, and a PreToolUse hook auto-routes trivial spawns to a cheaper model — never a pricier one. The rule when you set a model yourself is the same: only ever DOWNGRADE (never cost more than the session is on). Consult when spawning an agent of any kind (built-in, custom, background, isolated), picking a subagent_type, or fanning out into multiple agents.
 ---
 
 # Model Router
 
-A subagent spawned without a `model` **inherits the main conversation's model**. So the only cost-relevant lever is passing a *cheaper* model than the session is on — and passing a *pricier* one is a cost increase that this plugin deliberately avoids.
+An agent spawned without a `model` **inherits the main conversation's model**. So the only cost-relevant lever is passing a *cheaper* model than the session is on — and passing a *pricier* one is a cost increase that this plugin deliberately avoids.
+
+This applies to **every agent you spawn through the Agent tool** — built-in types, custom `.claude/agents` or plugin agents, background spawns, worktree/remote-isolated ones, and nested fan-outs — not just the generic catch-all subagent.
 
 This plugin's `PreToolUse` hook already routes automatically: for any spawn you make without a `model`, it reads the brief, and if the task is clearly simpler than the session's model warrants, it injects a cheaper model — never an upgrade. So the default, correct behaviour is usually to **leave `model` unset and let the hook decide.**
 
@@ -29,6 +31,8 @@ Independent of the model, match the type to the kind of work:
 - **Design / architecture / planning, no edits** → `Plan`.
 - **Implementation, edits, multi-step execution** → `general-purpose` (full tools). `claude` is an equivalent all-tools catch-all.
 - Prefer a specialized project/plugin agent when one clearly matches.
+
+If a specialized agent's definition already pins a `model:`, a `model` passed at spawn time **overrides that pin**, and so can the hook's verdict (which is judged against the session model, not the pin). If the pin matters, pass that same model explicitly.
 
 **Never use `subagent_type: "fork"` for routing** — forks always inherit the session's model and ignore any `model` override, so a fork can't be downgraded.
 
